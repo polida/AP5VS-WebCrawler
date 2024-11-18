@@ -5,10 +5,15 @@ package utb.fai;
 
 import java.io.BufferedReader;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.MalformedURLException;
 import java.net.URI;
-import java.util.HashSet;
-import java.util.LinkedList;
+import java.util.*;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import javax.swing.text.html.parser.ParserDelegator;
 
@@ -17,40 +22,73 @@ public class App {
 	public static void main(String[] args) {
 		LinkedList<URIinfo> foundURIs = new LinkedList<URIinfo>();
 		HashSet<URI> visitedURIs = new HashSet<URI>();
+		List<Future<?>> futures = new ArrayList<>();
 		URI uri;
 		try {
 			uri = new URI(args[0] + "/");
-			foundURIs.add(new URIinfo(uri, 0));
-			visitedURIs.add(uri);
-
 			if (args.length < 1) {
 				System.err.println("Missing parameter - start URL");
 				return;
 			}
+
 			/**
 			 * Zde zpracujte dalí parametry - maxDepth a debugLevel
 			 */
 
+
 			ParserCallback callBack = new ParserCallback(visitedURIs, foundURIs);
 			ParserDelegator parser = new ParserDelegator();
+			ExecutorService executor = Executors.newFixedThreadPool(10);
 
-			while (!foundURIs.isEmpty()) {
-				URIinfo URIinfo = foundURIs.removeFirst();
-				callBack.depth = URIinfo.depth;
-				callBack.pageURI = uri = URIinfo.uri;
-				System.err.println("Analyzing " + uri);
-				try {
-					BufferedReader reader = new BufferedReader(new InputStreamReader(uri.toURL().openStream()));
-					parser.parse(reader, callBack, true);
-					reader.close();
-				} catch (FileNotFoundException e) {
-					System.err.println("Error loading page - does it exist?");
+			int debugLevel = args.length > 2 ? Integer.parseInt(args[2]) : 0;
+			int maxDepth = args.length > 1 ? Integer.parseInt(args[1]) : 2;
+			foundURIs.add(new URIinfo(uri, 0));
+			callBack.maxDepth = maxDepth;
+			callBack.debugLevel  = debugLevel;
+
+			while (!foundURIs.isEmpty() || !futures.isEmpty())
+			{
+				futures.removeIf(Future::isDone);
+				Thread.sleep(50);
+
+				if (foundURIs.isEmpty()) {
+					continue;
 				}
+				URIinfo uriInfo = foundURIs.removeFirst();
+				callBack.depth = uriInfo.depth;
+				if (callBack.depth > callBack.maxDepth) {
+					continue;
+				}
+				callBack.pageURI = uri = uriInfo.uri;
+				System.err.println("Analyzing " + uri);
+				futures.add(executor.submit(() -> {
+					try {
+						BufferedReader reader = new BufferedReader(new InputStreamReader(uriInfo.uri.toURL().openStream()));
+						parser.parse(reader, callBack, true);
+						reader.close();
+					} catch (FileNotFoundException e) {
+						System.err.println("Error loading page - does it exist?");
+					}
+					catch (MalformedURLException e) {
+						System.err.println("Error: Malformed URL");
+					} catch (IOException e) {
+						System.err.println("IO Error");
+					}
+				}));
 			}
+
+
+			// Print word frequencies in descending order
+			callBack.getWordFrequency().entrySet().stream()
+					.sorted(Map.Entry.<String, Integer>comparingByValue().reversed())
+					.limit(20)
+					.forEach(entry -> System.out.println(entry.getKey() + ";" + entry.getValue()));
+
 		} catch (Exception e) {
-			System.err.println("Zachycena neoetøená výjimka, konèíme...");
+			System.err.println("Zachycena neošetřená výjimka, končíme...");
 			e.printStackTrace();
 		}
 	}
 
 }
+
